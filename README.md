@@ -79,6 +79,12 @@ BASE_URL=http://localhost:3000 python3 tools/smoke_test.py
 
 Runs everything that has the prerequisites it needs and skips the rest with a reason.
 
+## Recorded output
+
+[docs/verification-log.md](docs/verification-log.md) holds the actual output from each of
+the three checks, plus the end-to-end sign-in that was run against Contribo itself — use
+it as the baseline when a check starts behaving differently.
+
 ## Notes
 
 - The harness never prints a client secret; `check-oauth-config.mjs` works on fake values.
