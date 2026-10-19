@@ -80,3 +80,32 @@ With the fix applied in Contribo itself, a real GitHub PKCE flow was completed i
 browser: `/login` → provider lookup confirms `github` → authorize on github.com →
 callback → `/dashboard`, signed in as a GitHub account that does have a public email.
 Email-less accounts are covered by stage [2] above rather than by a live account.
+
+## CI (`harness` job, MongoDB 7 service container)
+
+`.github/workflows/verify.yml` runs `run.sh` on every push to `main` and on pull requests.
+Captured from run 39296604093 (PR #7), reproduced by the post-merge push run on `main` —
+timestamps and the runner's tab prefix omitted. The service container stands in for the
+local mongod; note that the HTTP group self-skips because nothing serves an app here.
+
+```
+=== OAuth configuration checks (no prerequisites) ===
+...
+All OAuth configuration checks passed.
+
+=== Null-email index reproduction (mongodb://127.0.0.1:27017) ===
+Connected to mongodb://127.0.0.1:27017 (database contribo_auth_repro, collection users_probe)
+    - second email-less account REJECTED (code 11000): E11000 duplicate key error collection: contribo_auth_repro.users_probe index: email_1 dup ...
+    - duplicate real email REJECTED (dev@example.com) as it should be
+    final index set: _id_ | email_unique_when_present
+
+All expectations met: the legacy index breaks email-less GitHub sign-ins, the partial index does not.
+
+=== HTTP smoke test (http://localhost:3000) ===
+SKIP  smoke test: nothing is listening on http://localhost:3000 - start the app (npm run dev).
+
+Done: 2 check group(s) ran, 1 skipped.
+```
+
+If a future run reports anything other than `2 ran, 1 skipped` on a push, the service
+container is not being reached and the job is passing for the wrong reason.
