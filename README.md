@@ -78,6 +78,22 @@ BASE_URL=http://localhost:3000 python3 tools/smoke_test.py
 ```
 
 Runs everything that has the prerequisites it needs and skips the rest with a reason.
+The same command is what CI runs — see below.
+
+## CI
+
+[.github/workflows/verify.yml](.github/workflows/verify.yml) has two jobs.
+
+`harness` runs on every push to `main` and on every pull request. It starts a MongoDB 7
+service container, exports `MONGODB_URI=mongodb://127.0.0.1:27017`, and runs `./run.sh`.
+The OAuth checks and the index reproduction are hermetic, so they run for real; the HTTP
+smoke test self-skips because this repository does not ship the app.
+
+`http-smoke` runs only on a manual dispatch. Enter a `base_url` pointing at a live
+Contribo (a deployed preview, or a tunnel to a local `npm run dev`) and the job runs
+`tools/smoke_test.py --json`, turns each failed check into an annotation, and writes a
+pass/fail checklist to the job summary. Exit codes are preserved: `1` for a failed check,
+`2` when the target is unreachable.
 
 ## Recorded output
 

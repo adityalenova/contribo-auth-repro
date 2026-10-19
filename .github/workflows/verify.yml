@@ -1,0 +1,118 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'URL of a running Contribo (or any next-auth v5) instance for the HTTP smoke test'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # The two hermetic check groups. run.sh already decides what it can and cannot
+  # do, so the workflow does not reimplement that logic: with a mongod available
+  # the index reproduction runs for real, and the HTTP smoke test self-skips
+  # because this repository does not ship the app.
+  harness:
+    runs-on: ubuntu-latest
+    env:
+      MONGODB_URI: mongodb://127.0.0.1:27017
+    services:
+      mongodb:
+        image: mongodb/mongodb-community-server:7.0-ubuntu2204
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run every available check
+        run: bash run.sh
+
+  # The outside-in checks need a live app, which is not something this repo can
+  # build on every push without depending on a third-party Next.js project
+  # installing cleanly in CI. Run it by hand against a deployed preview or a
+  # tunnelled `npm run dev`, and it writes the result into the job summary.
+  http-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run HTTP smoke checks
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          if [ -z "${BASE_URL}" ]; then
+            echo "::error::No base_url supplied. Point it at a running instance, e.g. a deployed preview or a tunnel to http://localhost:3000."
+            exit 1
+          fi
+
+          set +e
+          python3 tools/smoke_test.py "${BASE_URL}" --json > smoke.json
+          rc=$?
+          set -e
+
+          python3 - "${rc}" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          def safe(value, limit=200):
+              """Event/HTTP-derived text must not be able to forge an annotation line
+              or inject a checkbox into the job summary."""
+              text = re.sub(r"\s+", " ", str(value)).replace("`", "'").strip()
+              return text[:limit]
+
+          rc = int(sys.argv[1])
+          try:
+              data = json.load(open("smoke.json"))
+          except Exception as err:
+              print(f"::error::smoke_test.py exited {rc} without readable JSON: {safe(err)}")
+              sys.exit(rc or 1)
+
+          if data.get("error"):
+              print(f"::error::{safe(data['error'])}")
+              sys.exit(rc or 2)
+
+          checks = data.get("checks", [])
+          failed = [c["name"] for c in checks if not c["ok"]]
+          print(f"{len(checks) - len(failed)}/{len(checks)} HTTP smoke checks passed")
+          for name in failed:
+              print(f"FAIL  {safe(name)}")
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  fh.write(f"## HTTP smoke checks against {safe(data.get('base_url', ''))}\n\n")
+                  fh.write(f"{len(checks) - len(failed)} of {len(checks)} passed\n\n")
+                  for check in checks:
+                      mark = "x" if check["ok"] else " "
+                      detail = f" - {safe(check['detail'])}" if check.get("detail") else ""
+                      fh.write(f"- [{mark}] {safe(check['name'])}{detail}\n")
+
+          sys.exit(rc)
+          PY
